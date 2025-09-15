@@ -158,6 +158,7 @@ def update_inky_display(battery_level, last_updated_time):
             max_height = text_section_height
             font_size = 1
             
+            # Find the largest font size that fits
             while font_size < 1000:
                 font = ImageFont.truetype(font_file, font_size)
                 bbox = draw.textbbox((0, 0), message, font=font)
@@ -170,13 +171,22 @@ def update_inky_display(battery_level, last_updated_time):
                     font = ImageFont.truetype(font_file, font_size)
                     break
             
-            bbox = draw.textbbox((0, 0), message, font=font)
+            # Get the bbox for the original, large font size
+            original_bbox = draw.textbbox((0, 0), message, font=font)
+
+            # Reduce the font size by 5%
+            font_size = int(font_size * 0.95)
+            font = ImageFont.truetype(font_file, font_size)
             
-            # Calculate text position to center it within its section
-            x = (inky_display.WIDTH - (bbox[2] - bbox[0])) / 2
-            y = text_y_start + (text_section_height - (bbox[3] - bbox[1])) / 2
+            # Get the new bbox for the smaller font size
+            new_bbox = draw.textbbox((0, 0), message, font=font)
+
+            # Calculate text position to align the top of the text with the original position
+            x = (inky_display.WIDTH - (new_bbox[2] - new_bbox[0])) / 2
+            # The y coordinate is calculated to center the original larger text
+            original_y = text_y_start + (text_section_height - (original_bbox[3] - original_bbox[1])) / 2
             
-            draw.text((x, y), message, text_color, font)
+            draw.text((x, original_y), message, text_color, font)
 
         else:
             # Fallback for when the font file is missing.
@@ -217,4 +227,3 @@ if __name__ == "__main__":
 
         print(f"Waiting for {UPDATE_INTERVAL} seconds...")
         time.sleep(UPDATE_INTERVAL)
-
