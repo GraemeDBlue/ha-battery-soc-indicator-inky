@@ -3,6 +3,7 @@ import requests
 import sys
 import os
 import datetime
+import random
 from dotenv import load_dotenv
 from PIL import Image, ImageFont, ImageDraw
 # The following import can be a common point of failure.
@@ -30,20 +31,54 @@ INKY_COLOUR = "black"
 # Update interval in seconds (e.g., 300 for 5 minutes)
 UPDATE_INTERVAL = 300
 
+# Retry configuration
+MAX_RETRIES = 3
+INITIAL_RETRY_DELAY = 5  # Initial delay in seconds
+MAX_RETRY_DELAY = 60     # Maximum delay in seconds
+RETRY_BACKOFF_MULTIPLIER = 2  # Exponential backoff multiplier
+
+# Connection timeout in seconds
+CONNECTION_TIMEOUT = 15
+
 # --- Function Definitions ---
+
+def get_battery_status_with_retry():
+    """
+    Fetches the battery status from Home Assistant's REST API with retry logic.
+    Returns the battery level as a float, or None if all retries failed.
+    """
+    for attempt in range(MAX_RETRIES):
+        print(f"Attempting to fetch battery status from Home Assistant (attempt {attempt + 1}/{MAX_RETRIES})...")
+        
+        battery_level = get_battery_status()
+        if battery_level is not None:
+            return battery_level
+        
+        # If this wasn't the last attempt, wait before retrying
+        if attempt < MAX_RETRIES - 1:
+            # Calculate delay with exponential backoff and jitter
+            delay = min(INITIAL_RETRY_DELAY * (RETRY_BACKOFF_MULTIPLIER ** attempt), MAX_RETRY_DELAY)
+            # Add jitter to avoid thundering herd
+            jitter = random.uniform(0.1, 0.5) * delay
+            total_delay = delay + jitter
+            
+            print(f"Retry attempt {attempt + 1} failed. Waiting {total_delay:.1f} seconds before next attempt...")
+            time.sleep(total_delay)
+    
+    print(f"All {MAX_RETRIES} attempts failed. Will try again in {UPDATE_INTERVAL} seconds.")
+    return None
 
 def get_battery_status():
     """
     Fetches the battery status from Home Assistant's REST API.
     """
-    print("Attempting to fetch battery status from Home Assistant...")
     url = f"{HA_URL}/api/states/{SENSOR_ENTITY_ID}"
     headers = {
         "Authorization": f"Bearer {HA_TOKEN}",
         "content-type": "application/json",
     }
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=CONNECTION_TIMEOUT)
         response.raise_for_status()  # Raise an exception for bad status codes
         data = response.json()
         
@@ -51,12 +86,37 @@ def get_battery_status():
         battery_level = float(data.get("state", 0))
         print(f"Successfully fetched battery level: {battery_level}%")
         return battery_level
+    except requests.exceptions.Timeout:
+        print(f"Timeout error: Home Assistant did not respond within {CONNECTION_TIMEOUT} seconds")
+        return None
+    except requests.exceptions.ConnectionError:
+        print("Connection error: Unable to connect to Home Assistant")
+        return None
+    except requests.exceptions.HTTPError as e:
+        print(f"HTTP error from Home Assistant: {e}")
+        return None
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching data from Home Assistant: {e}")
+        print(f"Request error when contacting Home Assistant: {e}")
         return None
     except ValueError:
         print("Error: Could not convert battery level to a number. Is the sensor data correct?")
         return None
+    except Exception as e:
+        print(f"Unexpected error while fetching battery status: {e}")
+        return None
+
+def update_inky_display_safe(battery_level, last_updated_time):
+    """
+    Safely updates the Inky pHAT display with error handling.
+    Returns True if successful, False otherwise.
+    """
+    try:
+        update_inky_display(battery_level, last_updated_time)
+        return True
+    except Exception as e:
+        print(f"Error updating display: {e}")
+        print("Display update failed, but continuing with main loop...")
+        return False
 
 def update_inky_display(battery_level, last_updated_time):
     """
@@ -198,22 +258,72 @@ def update_inky_display(battery_level, last_updated_time):
         
     except Exception as e:
         print(f"A critical error occurred while updating the Inky pHAT display: {e}")
-        # Re-raise the exception to provide a full traceback for debugging.
+        # Don't re-raise the exception to prevent crashing the main loop
         raise
 
 # --- Main loop ---
 if __name__ == "__main__":
     print("Starting Growatt battery monitor script...")
+    print(f"Update interval: {UPDATE_INTERVAL} seconds")
+    print(f"Max retries: {MAX_RETRIES}")
+    print(f"Connection timeout: {CONNECTION_TIMEOUT} seconds")
+    
+    last_successful_battery_level = None
+    last_successful_update_time = None
+    consecutive_failures = 0
     
     while True:
         try:
-            battery_status = get_battery_status()
+            print(f"\n--- Update cycle started at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
+            
+            battery_status = get_battery_status_with_retry()
+            
             if battery_status is not None:
-                last_updated_time = datetime.datetime.now()
-                update_inky_display(battery_status, last_updated_time)
+                # Successfully got battery status
+                last_successful_battery_level = battery_status
+                last_successful_update_time = datetime.datetime.now()
+                consecutive_failures = 0
+                
+                # Try to update the display
+                display_success = update_inky_display_safe(battery_status, last_successful_update_time)
+                if display_success:
+                    print("✓ Battery status fetched and display updated successfully")
+                else:
+                    print("✓ Battery status fetched, but display update failed")
+            else:
+                # Failed to get battery status
+                consecutive_failures += 1
+                print(f"✗ Failed to fetch battery status (consecutive failures: {consecutive_failures})")
+                
+                # If we have a previous successful reading, show it with an error indicator
+                if last_successful_battery_level is not None:
+                    print(f"Using last known battery level: {last_successful_battery_level}%")
+                    # Update display with last known value but show it's stale
+                    update_inky_display_safe(last_successful_battery_level, last_successful_update_time)
+                else:
+                    # No previous data, show error on display
+                    print("No previous battery data available, showing error on display")
+                    update_inky_display_safe(None, None)
+                
+                # If we've had many consecutive failures, consider longer wait
+                if consecutive_failures >= 5:
+                    extended_wait = min(UPDATE_INTERVAL * 2, 1800)  # Max 30 minutes
+                    print(f"Many consecutive failures detected. Extending wait to {extended_wait} seconds.")
+                    time.sleep(extended_wait - UPDATE_INTERVAL)  # Subtract normal interval since we sleep below
+                    
+        except KeyboardInterrupt:
+            print("\nReceived interrupt signal. Shutting down gracefully...")
+            break
         except Exception as main_e:
+            consecutive_failures += 1
             print(f"An unexpected error occurred in the main loop: {main_e}")
+            print(f"Consecutive failures: {consecutive_failures}")
             print("The script will continue to run after the update interval.")
+            
+            # Log the full traceback for debugging
+            import traceback
+            print("Full traceback:")
+            traceback.print_exc()
 
         print(f"Waiting for {UPDATE_INTERVAL} seconds...")
         time.sleep(UPDATE_INTERVAL)

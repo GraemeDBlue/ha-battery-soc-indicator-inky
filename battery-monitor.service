@@ -1,0 +1,29 @@
+[Unit]
+Description=Home Assistant Battery SOC Indicator for Inky Display
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=YOUR_USER
+Group=YOUR_USER
+WorkingDirectory=PROJECT_PATH
+ExecStart=/usr/bin/python3 PROJECT_PATH/batter-level.py
+Restart=always
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables (alternatively, use EnvironmentFile)
+# Environment=HA_URL=http://your_home_assistant_ip:8123
+# Environment=HA_TOKEN=your_long_lived_access_token
+# Environment=SENSOR_ENTITY_ID=sensor.growatt_battery_level
+
+# Graceful shutdown
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
