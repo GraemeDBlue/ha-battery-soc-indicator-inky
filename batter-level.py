@@ -105,23 +105,22 @@ def get_battery_status():
         print(f"Unexpected error while fetching battery status: {e}")
         return None
 
-def update_inky_display_safe(battery_level, last_updated_time):
+def update_inky_display_safe(battery_level, last_updated_time, connection_status="OK"):
     """
     Safely updates the Inky pHAT display with error handling.
     Returns True if successful, False otherwise.
     """
     try:
-        update_inky_display(battery_level, last_updated_time)
+        update_inky_display(battery_level, last_updated_time, connection_status)
         return True
     except Exception as e:
         print(f"Error updating display: {e}")
         print("Display update failed, but continuing with main loop...")
         return False
 
-def update_inky_display(battery_level, last_updated_time):
+def update_inky_display(battery_level, last_updated_time, connection_status="OK"):
     """
-    Updates the Inky pHAT display with the current battery level, scaling
-    the text to fill the screen and centering it.
+    Updates the Inky pHAT display with a clean, readable layout.
     """
     print("Attempting to update the Inky pHAT display...")
     try:
@@ -136,121 +135,152 @@ def update_inky_display(battery_level, last_updated_time):
         img = Image.new("P", (inky_display.WIDTH, inky_display.HEIGHT))
         draw = ImageDraw.Draw(img)
 
-        # A common font file on many Linux systems. You might need to install it.
-        # For example, on Raspberry Pi OS: sudo apt-get install fonts-dejavu-core
-        font_file = "DejaVuSans.ttf"
-        
-        can_size_text = False
-        try:
-            # First, try to load the desired font for dynamic sizing.
-            font = ImageFont.truetype(font_file, 1)
-            can_size_text = True
-        except IOError:
-            print(f"Font '{font_file}' not found. Falling back to default font.")
-            font = ImageFont.load_default()
-            can_size_text = False
-        
-        # Load a small font for the timestamp
-        try:
-            small_font = ImageFont.truetype(font_file, 10)
-        except IOError:
-            small_font = ImageFont.load_default()
+        # Clear background
+        draw.rectangle((0, 0, inky_display.WIDTH, inky_display.HEIGHT), fill=inky_display.WHITE)
 
-        # Map the string INKY_COLOUR to the actual Inky color constant
+        # Font setup
+        try:
+            large_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 36)
+            medium_font = ImageFont.truetype("DejaVuSans.ttf", 14)
+            small_font = ImageFont.truetype("DejaVuSans.ttf", 10)
+        except IOError:
+            # Fallback to default fonts with different sizes
+            try:
+                large_font = ImageFont.truetype("DejaVuSans.ttf", 28)
+                medium_font = ImageFont.truetype("DejaVuSans.ttf", 14)
+                small_font = ImageFont.truetype("DejaVuSans.ttf", 10)
+            except IOError:
+                large_font = ImageFont.load_default()
+                medium_font = ImageFont.load_default()
+                small_font = ImageFont.load_default()
+
+        # Color mapping
         color_map = {
             "black": inky_display.BLACK,
             "white": inky_display.WHITE,
             "red": inky_display.RED,
             "yellow": inky_display.YELLOW,
         }
-        
-        # Default color is based on the INKY_COLOUR variable
         default_color = color_map.get(INKY_COLOUR.lower(), inky_display.BLACK)
+
+        # Layout dimensions
+        margin = 8
+        current_time = datetime.datetime.now()
         
+        # Determine colors and status
         if battery_level is not None:
-            message = f"{int(battery_level)}%"
             if battery_level < 20:
-                text_color = inky_display.RED
+                battery_color = inky_display.RED
+                status_symbol = "!"
+            elif battery_level < 50:
+                battery_color = color_map.get("yellow", default_color)
+                status_symbol = "~"
             else:
-                text_color = default_color
+                battery_color = default_color
+                status_symbol = "+"
+            
+            main_text = f"{int(battery_level)}%"
+            is_error = False
         else:
-            message = "Error"
-            text_color = inky_display.RED
-            can_size_text = False
+            battery_color = inky_display.RED
+            status_symbol = "X"
+            main_text = "ERROR"
+            is_error = True
 
-        draw.rectangle((0, 0, inky_display.WIDTH, inky_display.HEIGHT), fill=inky_display.WHITE)
+        # 1. TOP SECTION: Main percentage/status (y: 0-40)
+        if not is_error:
+            # Center the large percentage
+            bbox = draw.textbbox((0, 0), main_text, font=large_font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            x = (inky_display.WIDTH - text_width) // 2
+            y = 5
+            draw.text((x, y), main_text, battery_color, font=large_font)
+        else:
+            # Center the ERROR text
+            bbox = draw.textbbox((0, 0), main_text, font=medium_font)
+            text_width = bbox[2] - bbox[0]
+            x = (inky_display.WIDTH - text_width) // 2
+            y = 15
+            draw.text((x, y), main_text, battery_color, font=medium_font)
 
-        # Define dimensions based on percentages of screen height
-        bar_section_height = int(inky_display.HEIGHT * 0.40)
-        text_section_height = int(inky_display.HEIGHT * 0.40)
-        top_margin = int(inky_display.HEIGHT * 0.05)
-        middle_margin = int(inky_display.HEIGHT * 0.10)
+        # 2. MIDDLE SECTION: Battery bar (y: 45-65)
+        bar_y = 45
+        bar_height = 16
+        bar_margin = margin
+        bar_width = inky_display.WIDTH - (2 * bar_margin)
+        
+        # Draw battery bar outline
+        draw.rectangle(
+            (bar_margin, bar_y, bar_margin + bar_width, bar_y + bar_height),
+            outline=default_color,
+            width=2
+        )
 
-        # Define y-coordinates for layout
-        bar_y_start = top_margin
-        bar_y_end = bar_y_start + bar_section_height
-        text_y_start = bar_y_end + middle_margin
+        if battery_level is not None and not is_error:
+            # Fill the battery bar
+            fill_width = int((battery_level / 100) * (bar_width - 4))
+            if fill_width > 0:
+                draw.rectangle(
+                    (bar_margin + 2, bar_y + 2, bar_margin + 2 + fill_width, bar_y + bar_height - 2),
+                    fill=battery_color
+                )
+        else:
+            # Show dotted pattern for error state
+            for i in range(bar_margin + 4, bar_margin + bar_width - 4, 6):
+                draw.rectangle((i, bar_y + 4, i + 2, bar_y + bar_height - 4), fill=default_color)
 
-        # Draw the horizontal battery bar first
-        if battery_level is not None:
-            bar_height = bar_section_height - 10 # small buffer
-            bar_margin = 10
-            bar_width = inky_display.WIDTH - (2 * bar_margin)
+        # 3. BOTTOM SECTION: Status and time info (y: 70-104)
+        bottom_y = 72
+        
+        # Current time (top right)
+        time_text = current_time.strftime("%H:%M")
+        time_bbox = draw.textbbox((0, 0), time_text, font=small_font)
+        time_x = inky_display.WIDTH - (time_bbox[2] - time_bbox[0]) - margin
+        draw.text((time_x, bottom_y), time_text, default_color, font=small_font)
+        
+        # Status symbol next to time
+        symbol_x = time_x - 15
+        status_color = inky_display.RED if (is_error or connection_status != "OK") else default_color
+        draw.text((symbol_x, bottom_y), status_symbol, status_color, font=small_font)
+
+        # Status text (bottom left)
+        if is_error:
+            status_text = "Connection Failed"
+            draw.text((margin, bottom_y), status_text, inky_display.RED, font=small_font)
             
-            # Bar graph background
-            draw.rectangle(
-                (bar_margin, bar_y_start + 5, bar_margin + bar_width, bar_y_start + 5 + bar_height),
-                outline=default_color,
-                fill=None
-            )
-
-            # Filled bar
-            fill_width = (battery_level / 100) * bar_width
-            draw.rectangle(
-                (bar_margin, bar_y_start + 5, bar_margin + fill_width, bar_y_start + 5 + bar_height),
-                fill=text_color,
-                outline=None
-            )
-
-        if can_size_text:
-            # Calculate a font size that fits the text section.
-            max_width = inky_display.WIDTH - 10
-            max_height = text_section_height
-            font_size = 1
+            # Show last known value if available - we need to access global variables
+            try:
+                # These variables should be available from the main loop
+                if 'last_successful_battery_level' in globals() and last_successful_battery_level is not None and 'last_successful_update_time' in globals() and last_successful_update_time is not None:
+                    last_text = f"Last: {int(last_successful_battery_level)}% at {last_successful_update_time.strftime('%H:%M')}"
+                    draw.text((margin, bottom_y + 12), last_text, default_color, font=small_font)
+            except:
+                pass
+        else:
+            status_text = f"Battery Level"
+            draw.text((margin, bottom_y), status_text, default_color, font=small_font)
             
-            while font_size < 1000:
-                font = ImageFont.truetype(font_file, font_size)
-                bbox = draw.textbbox((0, 0), message, font=font)
-                text_width = bbox[2] - bbox[0]
-                text_height = bbox[3] - bbox[1]
-                if text_width < max_width and text_height < max_height:
-                    font_size += 1
+            # Show last update time
+            if last_updated_time:
+                age = current_time - last_updated_time
+                if age.total_seconds() < 60:
+                    age_text = "Just now"
+                elif age.total_seconds() < 3600:
+                    age_text = f"{int(age.total_seconds() / 60)}m ago"
                 else:
-                    font_size -= 1
-                    font = ImageFont.truetype(font_file, font_size)
-                    break
-            
-            bbox = draw.textbbox((0, 0), message, font=font)
-            
-            # Calculate text position to center it within its section
-            x = (inky_display.WIDTH - (bbox[2] - bbox[0])) / 2
-            y = text_y_start + (text_section_height - (bbox[3] - bbox[1])) / 2
-            
-            draw.text((x, y), message, text_color, font)
+                    age_text = f"{int(age.total_seconds() / 3600)}h ago"
+                
+                update_text = f"Updated: {age_text}"
+                draw.text((margin, bottom_y + 12), update_text, default_color, font=small_font)
 
-        else:
-            # Fallback for when the font file is missing.
-            draw.text((5, text_y_start), message, inky_display.BLACK, font)
-            draw.text((5, text_y_start + 20), "Font missing.", inky_display.BLACK, font)
-
-        # Draw the last updated timestamp at the bottom
-        if last_updated_time:
-            timestamp_text = f"Updated: {last_updated_time.strftime('%H:%M')}"
-            ts_bbox = draw.textbbox((0,0), timestamp_text, font=small_font)
-            ts_x = inky_display.WIDTH - (ts_bbox[2] - ts_bbox[0]) - 5
-            ts_y = inky_display.HEIGHT - (ts_bbox[3] - ts_bbox[1]) - 15  # Adjusted for more padding
-            draw.text((ts_x, ts_y), timestamp_text, inky_display.BLACK, font=small_font)
-
+        # Add connection quality indicator if needed
+        try:
+            if 'consecutive_failures' in globals() and consecutive_failures > 0 and not is_error:
+                quality_text = f"Retries: {consecutive_failures}"
+                draw.text((margin, bottom_y + 24), quality_text, inky_display.RED, font=small_font)
+        except:
+            pass
 
         inky_display.set_image(img)
         inky_display.show()
@@ -285,7 +315,7 @@ if __name__ == "__main__":
                 consecutive_failures = 0
                 
                 # Try to update the display
-                display_success = update_inky_display_safe(battery_status, last_successful_update_time)
+                display_success = update_inky_display_safe(battery_status, last_successful_update_time, "OK")
                 if display_success:
                     print("✓ Battery status fetched and display updated successfully")
                 else:
@@ -293,17 +323,18 @@ if __name__ == "__main__":
             else:
                 # Failed to get battery status
                 consecutive_failures += 1
+                connection_status = "FAILED"
                 print(f"✗ Failed to fetch battery status (consecutive failures: {consecutive_failures})")
                 
                 # If we have a previous successful reading, show it with an error indicator
                 if last_successful_battery_level is not None:
                     print(f"Using last known battery level: {last_successful_battery_level}%")
                     # Update display with last known value but show it's stale
-                    update_inky_display_safe(last_successful_battery_level, last_successful_update_time)
+                    update_inky_display_safe(last_successful_battery_level, last_successful_update_time, connection_status)
                 else:
                     # No previous data, show error on display
                     print("No previous battery data available, showing error on display")
-                    update_inky_display_safe(None, None)
+                    update_inky_display_safe(None, None, connection_status)
                 
                 # If we've had many consecutive failures, consider longer wait
                 if consecutive_failures >= 5:
