@@ -141,14 +141,14 @@ def update_inky_display(battery_level, last_updated_time, connection_status="OK"
         # Font setup
         try:
             large_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 36)
-            medium_font = ImageFont.truetype("DejaVuSans.ttf", 14)
-            small_font = ImageFont.truetype("DejaVuSans.ttf", 10)
+            medium_font = ImageFont.truetype("DejaVuSans.ttf", 16)
+            small_font = ImageFont.truetype("DejaVuSans.ttf", 12)
         except IOError:
             # Fallback to default fonts with different sizes
             try:
                 large_font = ImageFont.truetype("DejaVuSans.ttf", 28)
-                medium_font = ImageFont.truetype("DejaVuSans.ttf", 14)
-                small_font = ImageFont.truetype("DejaVuSans.ttf", 10)
+                medium_font = ImageFont.truetype("DejaVuSans.ttf", 16)
+                small_font = ImageFont.truetype("DejaVuSans.ttf", 12)
             except IOError:
                 large_font = ImageFont.load_default()
                 medium_font = ImageFont.load_default()
